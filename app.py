@@ -1,6 +1,6 @@
 import streamlit as st
 import sqlite3
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 import os
 
@@ -28,29 +28,11 @@ if 'bot' not in st.session_state:
         st.session_state.messages = []
         st.session_state.case_creation_mode = False
         st.session_state.extracted_data = {}
+        st.session_state.awaiting_case_info = False
         st.success("✅ Bot initialized successfully!")
     except Exception as e:
         st.error(f"❌ Error initializing bot: {e}")
         st.stop()
-
-# Helper function to validate and clean data
-def validate_case_data(data):
-    """Validate case data against business rules"""
-    errors = []
-    
-    if not data.get('seller_name'):
-        errors.append("Seller name is required")
-    
-    if data.get('marketplace') and data['marketplace'] not in MARKETPLACES:
-        errors.append(f"Marketplace must be one of: {', '.join(MARKETPLACES)}")
-    
-    if data.get('case_source') and data['case_source'] not in CASE_SOURCES:
-        errors.append(f"Case source must be one of: {', '.join(CASE_SOURCES)}")
-    
-    if data.get('workstream') and data['workstream'] not in WORKSTREAMS:
-        errors.append(f"Workstream must be one of: {', '.join(WORKSTREAMS)}")
-    
-    return errors
 
 # Sidebar
 st.sidebar.title("🤖 API Support Bot Enhanced")
@@ -68,17 +50,17 @@ if st.sidebar.button("Switch Model"):
 try:
     cases = st.session_state.bot.show_all_cases()
     total_cases = len(cases)
-    open_cases = len([c for c in cases if c[3] in ['SUBMITTED', 'WIP', 'AWAITING INFORMATION']])
+    active_cases = len([c for c in cases if c[3] in ['SUBMITTED', 'WIP', 'AWAITING INFORMATION']])
     
     st.sidebar.metric("Total Cases", total_cases)
-    st.sidebar.metric("Active Cases", open_cases)
+    st.sidebar.metric("Active Cases", active_cases)
     
 except Exception as e:
     st.sidebar.error(f"Error loading stats: {e}")
 
 # Main interface
 st.title("🤖 API Support Bot Enhanced")
-st.markdown("Advanced case management with interactive workflows")
+st.markdown("Advanced case management with analytics and interactive workflows")
 
 # Tabs
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Chat", "➕ Create Case", "📊 Dashboard", "📋 Cases"])
@@ -87,25 +69,104 @@ with tab1:
     st.subheader("Chat Interface")
     
     # Quick actions
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("🆕 Start New Case"):
-            st.session_state.case_creation_mode = True
-            st.rerun()
+            st.session_state.awaiting_case_info = True
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": """🆕 **Starting New Case Creation**
+
+Please provide the following information to create a new case:
+
+**Required:**
+- Seller name
+- Issue description
+
+**Optional:**
+- Amazon Case ID (AMZ-xxxxxxxx)
+- Marketplace (EU, NA, etc.)
+- Priority (Low/Medium/High)
+- Workstream
+- API involved
+
+You can provide this information in natural language, for example:
+"New case for TechCorp on EU marketplace, Product API authentication issue, high priority, Amazon case AMZ-123456789"
+"""
+            })
     
     with col2:
         if st.button("🔍 Query Case"):
             st.session_state.messages.append({
                 "role": "assistant", 
-                "content": "Please provide a case ID (e.g., CASE-0001) to query."
+                "content": """🔍 **Query Case Information**
+
+Please provide a case ID to get detailed information.
+
+Examples:
+- "Show case CASE-0001"
+- "Display details for CASE-0002" 
+- "Get info on CASE-0003"
+"""
             })
     
     with col3:
         if st.button("🔄 Update Case"):
             st.session_state.messages.append({
                 "role": "assistant", 
-                "content": "Please specify the case ID and update details (e.g., 'Update CASE-0001: Issue resolved')."
+                "content": """🔄 **Update Case**
+
+Please specify the case ID and update details.
+
+Examples:
+- "Update CASE-0001: API credentials validated, moving to PMA"
+- "Update CASE-0002: Issue resolved, CSAT score 5, feedback received"
+- "Update CASE-0003: On hold due to seller unavailability"
+
+You can include:
+- Sub-status changes
+- Completion dates
+- CSAT scores
+- Feedback status
+"""
             })
+    
+    with col4:
+        if st.button("📊 Analytics"):
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": """📊 **Analytics Queries**
+
+Ask me about case statistics and analysis.
+
+Examples:
+- "How many cases are in WIP status?"
+- "Show me EU marketplace cases"
+- "Count Smart Connect workstream cases"
+- "High priority cases by marketplace"
+- "Cases in ON_HOLD sub-status"
+"""
+            })
+    
+    # Example queries
+    with st.expander("💡 Example Commands"):
+        st.markdown("""
+        **Create Cases:**
+        - "New case for Acme Corp on EU marketplace, Product API integration issue, high priority, Amazon case AMZ-123456789"
+        
+        **Update Cases:**
+        - "Update CASE-0001: Credentials validated, moving to PMA status"
+        - "Update CASE-0002: Issue resolved, completion date 2024-01-20, CSAT 5"
+        
+        **Query Cases:**
+        - "Show case CASE-0001"
+        - "Display details for CASE-0002"
+        
+        **Analytics:**
+        - "How many WIP cases in EU marketplace for Smart Connect workstream?"
+        - "Show me high priority cases by marketplace"
+        - "Count of cases in PMA sub-status"
+        """)
     
     # Display chat history
     for message in st.session_state.messages:
@@ -124,84 +185,18 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
                 try:
-                    # Determine intent
-                    intent = st.session_state.bot.determine_intent(prompt)
+                    # Process through the bot
+                    response = st.session_state.bot.process_message("streamlit_user", prompt)
                     
-                    if "create" in intent:
-                        # Extract information for case creation
+                    # Check if this was a case creation attempt
+                    intent = st.session_state.bot.determine_intent(prompt)
+                    if "create" in intent and st.session_state.awaiting_case_info:
+                        st.session_state.awaiting_case_info = False
+                        # Extract and store data for Create Case tab
                         extracted_data = st.session_state.bot.extract_case_info(prompt)
-                        
                         if "error" not in extracted_data:
                             st.session_state.extracted_data = extracted_data
-                            st.session_state.case_creation_mode = True
-                            
-                            response = "🎯 **Information Extracted!** Please review and complete the missing information in the 'Create Case' tab."
-                        else:
-                            response = f"❌ Error extracting information: {extracted_data['error']}"
-                    
-                    elif "update" in intent:
-                        # Extract update information
-                        update_data = st.session_state.bot.extract_update_info(prompt)
-                        
-                        if "error" not in update_data and update_data.get('case_id'):
-                            success, message = st.session_state.bot.update_case_status(
-                                update_data['case_id'],
-                                update_data.get('note', 'Update from chat'),
-                                update_data.get('sub_status', 'Note'),
-                                'Chat User'
-                            )
-                            
-                            if success:
-                                response = f"✅ **{message}**\n\n**Note:** {update_data.get('note', 'Update recorded')}\n**Sub-status:** {update_data.get('sub_status', 'Note')}"
-                            else:
-                                response = f"❌ {message}"
-                        else:
-                            response = "❌ Please specify a valid case ID and update details."
-                    
-                    elif "query" in intent:
-                        # Extract case ID from prompt
-                        words = prompt.upper().split()
-                        case_id = None
-                        for word in words:
-                            if word.startswith('CASE-'):
-                                case_id = word
-                                break
-                        
-                        if case_id:
-                            case_dict, updates = st.session_state.bot.query_case(case_id)
-                            
-                            if case_dict:
-                                updates_text = ""
-                                if updates:
-                                    updates_text = "\n\n**Recent Updates:**"
-                                    for note, updated_by, timestamp, sub_status in updates:
-                                        date = timestamp.split('T')[0]
-                                        updates_text += f"\n• {date}: {note} ({sub_status})"
-                                
-                                response = f"""📋 **Case {case_id}**
-
-**Seller:** {case_dict['seller_name']} (ID: {case_dict['seller_id']})
-**Amazon Case ID:** {case_dict.get('amazon_case_id', 'Not provided')}
-**Marketplace:** {case_dict['marketplace']}
-**Issue:** {case_dict['issue_type']}
-**Priority:** {case_dict['priority']} | **Status:** {case_dict['case_status']}
-**Sub-status:** {case_dict.get('last_sub_status', 'None')}
-**API:** {case_dict['api_supported']}
-**Workstream:** {case_dict['workstream']}
-**Specialist:** {case_dict['specialist_name']}
-
-**Notes:** {case_dict.get('notes', 'None')}{updates_text}"""
-                            else:
-                                response = f"❌ Case {case_id} not found"
-                        else:
-                            response = "❌ Please specify a case ID (e.g., 'show case CASE-0001')"
-                    
-                    else:
-                        response = """❓ I'm not sure what you want to do. Try:
-- 'New case for [seller] on [marketplace]'
-- 'Update CASE-0001: [description]'  
-- 'Show case CASE-0001'
-- Or use the quick action buttons above"""
+                            response += "\n\n🎯 **Information extracted!** Please review and complete in the 'Create Case' tab."
                     
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
@@ -236,9 +231,9 @@ with tab2:
                                      index=CASE_SOURCES.index(extracted.get('case_source')) if extracted.get('case_source') in CASE_SOURCES else 0)
             workstream = st.selectbox("Workstream *", WORKSTREAMS,
                                     index=WORKSTREAMS.index(extracted.get('workstream')) if extracted.get('workstream') in WORKSTREAMS else 0)
+            issue_type = st.text_input("Issue Type *", value=extracted.get('issue_type', ''))
         
         with col2:
-            issue_type = st.text_input("Issue Type *", value=extracted.get('issue_type', ''))
             complexity = st.selectbox("Complexity *", COMPLEXITIES,
                                     index=COMPLEXITIES.index(extracted.get('complexity')) if extracted.get('complexity') in COMPLEXITIES else 1)
             priority = st.selectbox("Priority *", PRIORITIES,
@@ -246,8 +241,12 @@ with tab2:
             seller_type = st.selectbox("Seller Type *", SELLER_TYPES,
                                      index=SELLER_TYPES.index(extracted.get('seller_type')) if extracted.get('seller_type') in SELLER_TYPES else 1)
             api_supported = st.text_input("API Supported", value=extracted.get('api_supported', 'General API'))
+            listing_start_date = st.date_input("Listing Start Date", 
+                                             value=datetime.strptime(extracted.get('listing_start_date', datetime.now().strftime('%Y-%m-%d')), '%Y-%m-%d').date())
+            feedback_received = st.selectbox("Feedback Received", ["No", "Yes"])
         
         notes = st.text_area("Notes", value=extracted.get('notes', ''), height=100)
+        csat_score = st.slider("CSAT Score (if applicable)", 1.0, 5.0, 3.0, 0.5)
         
         # Form submission
         col1, col2, col3 = st.columns([1, 1, 2])
@@ -267,6 +266,9 @@ with tab2:
                         'priority': priority,
                         'seller_type': seller_type,
                         'api_supported': api_supported,
+                        'listing_start_date': listing_start_date.strftime('%Y-%m-%d'),
+                        'feedback_received': feedback_received,
+                        'csat_score': csat_score if feedback_received == "Yes" else None,
                         'notes': notes
                     }
                     
@@ -283,7 +285,6 @@ with tab2:
                         
                         # Clear form data
                         st.session_state.extracted_data = {}
-                        st.session_state.case_creation_mode = False
                         
                     except Exception as e:
                         st.error(f"❌ Error creating case: {e}")
@@ -296,56 +297,95 @@ with tab2:
                 st.rerun()
 
 with tab3:
-    st.subheader("📊 Analytics Dashboard")
+    st.subheader("📊 Advanced Analytics Dashboard")
     
+    # Date filters
+    st.markdown("### 📅 Date Filters")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        listing_start = st.date_input("Listing Start Date From", value=date(2024, 1, 1))
+    with col2:
+        listing_end = st.date_input("Listing Start Date To", value=date.today())
+    with col3:
+        created_start = st.date_input("Created Date From", value=date(2024, 1, 1))
+    with col4:
+        created_end = st.date_input("Created Date To", value=date.today())
+    
+    # Get hierarchical data
     try:
-        cases = st.session_state.bot.show_all_cases()
+        df = st.session_state.bot.get_hierarchical_data(
+            listing_start.strftime('%Y-%m-%d'),
+            listing_end.strftime('%Y-%m-%d'),
+            created_start.strftime('%Y-%m-%d'),
+            created_end.strftime('%Y-%m-%d')
+        )
         
-        if cases:
-            # Convert to DataFrame
-            df = pd.DataFrame(cases, columns=['case_id', 'seller_name', 'marketplace', 'case_status', 'priority', 'issue_type', 'last_sub_status'])
+        if not df.empty:
+            st.markdown("### 🏗️ Hierarchical Case Breakdown")
+            st.markdown("**Workstream → Marketplace → Issue Type → API → Sub Status**")
             
-            # Metrics
+            # Create hierarchical view
+            for workstream in df['workstream'].unique():
+                with st.expander(f"🔧 **{workstream}** ({df[df['workstream']==workstream]['count'].sum()} cases)"):
+                    ws_data = df[df['workstream'] == workstream]
+                    
+                    for marketplace in ws_data['marketplace'].unique():
+                        mp_data = ws_data[ws_data['marketplace'] == marketplace]
+                        st.markdown(f"  📍 **{marketplace}** ({mp_data['count'].sum()} cases)")
+                        
+                        for issue_type in mp_data['issue_type'].unique():
+                            it_data = mp_data[mp_data['issue_type'] == issue_type]
+                            st.markdown(f"    🔧 {issue_type} ({it_data['count'].sum()} cases)")
+                            
+                            for api in it_data['api_supported'].unique():
+                                api_data = it_data[it_data['api_supported'] == api]
+                                st.markdown(f"      🔌 {api} ({api_data['count'].sum()} cases)")
+                                
+                                for sub_status in api_data['last_sub_status'].unique():
+                                    ss_count = api_data[api_data['last_sub_status'] == sub_status]['count'].iloc[0]
+                                    st.markdown(f"        ▸ {sub_status}: {ss_count}")
+            
+            # Summary metrics
+            st.markdown("### 📈 Summary Metrics")
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Total Cases", len(df))
+                st.metric("Total Cases", df['count'].sum())
             with col2:
-                active_cases = len(df[df['case_status'].isin(['SUBMITTED', 'WIP', 'AWAITING INFORMATION'])])
-                st.metric("Active Cases", active_cases)
+                st.metric("Workstreams", df['workstream'].nunique())
             with col3:
-                high_priority = len(df[df['priority'] == 'High'])
-                st.metric("High Priority", high_priority)
+                st.metric("Marketplaces", df['marketplace'].nunique())
             with col4:
-                unique_marketplaces = df['marketplace'].nunique()
-                st.metric("Marketplaces", unique_marketplaces)
+                st.metric("Sub-statuses", df['last_sub_status'].nunique())
             
             # Charts
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Cases by Status")
-                status_counts = df['case_status'].value_counts()
-                st.bar_chart(status_counts)
+                st.subheader("Cases by Workstream")
+                ws_counts = df.groupby('workstream')['count'].sum().sort_values(ascending=False)
+                st.bar_chart(ws_counts)
             
             with col2:
-                st.subheader("Cases by Sub-Status")
-                substatus_counts = df['last_sub_status'].value_counts()
-                st.bar_chart(substatus_counts)
+                st.subheader("Cases by Marketplace")
+                mp_counts = df.groupby('marketplace')['count'].sum().sort_values(ascending=False)
+                st.bar_chart(mp_counts)
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Cases by Marketplace")
-                marketplace_counts = df['marketplace'].value_counts()
-                st.bar_chart(marketplace_counts)
+                st.subheader("Cases by Sub-Status")
+                ss_counts = df.groupby('last_sub_status')['count'].sum().sort_values(ascending=False)
+                st.bar_chart(ss_counts)
             
             with col2:
-                st.subheader("Priority Distribution")
-                priority_counts = df['priority'].value_counts()
-                st.bar_chart(priority_counts)
+                st.subheader("Cases by API")
+                api_counts = df.groupby('api_supported')['count'].sum().sort_values(ascending=False)
+                st.bar_chart(api_counts)
+            
         else:
-            st.info("No cases found. Create some cases to see analytics!")
+            st.info("No cases found for the selected date range.")
             
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
@@ -410,13 +450,15 @@ with tab4:
                                 st.markdown(f"**Marketplace:** {case_dict['marketplace']}")
                                 st.markdown(f"**Priority:** {case_dict['priority']}")
                                 st.markdown(f"**Status:** {case_dict['case_status']}")
+                                st.markdown(f"**Listing Start:** {case_dict.get('listing_start_date', 'Not set')}")
                             
                             with subcol2:
                                 st.markdown(f"**Issue Type:** {case_dict['issue_type']}")
                                 st.markdown(f"**API:** {case_dict['api_supported']}")
                                 st.markdown(f"**Workstream:** {case_dict['workstream']}")
                                 st.markdown(f"**Sub-status:** {case_dict['last_sub_status']}")
-                                st.markdown(f"**Created:** {case_dict['created_at'][:10]}")
+                                st.markdown(f"**Feedback:** {case_dict.get('feedback_received', 'No')}")
+                                st.markdown(f"**CSAT:** {case_dict.get('csat_score', 'Not rated')}")
                             
                             st.markdown(f"**Notes:** {case_dict['notes']}")
                         
@@ -427,13 +469,27 @@ with tab4:
                                 update_note = st.text_area("Update Note", height=100)
                                 new_substatus = st.selectbox("New Sub-Status", SUB_STATUSES)
                                 
+                                # Additional fields for completion
+                                completion_date = st.date_input("Completion Date (if applicable)")
+                                feedback_received = st.selectbox("Feedback Received", ["No Change", "No", "Yes"])
+                                csat_score = st.slider("CSAT Score (if applicable)", 1.0, 5.0, 3.0, 0.5)
+                                
                                 if st.form_submit_button("Update Case"):
                                     if update_note:
+                                        additional_data = {}
+                                        if completion_date != date.today():
+                                            additional_data['listing_completion_date'] = completion_date.strftime('%Y-%m-%d')
+                                        if feedback_received != "No Change":
+                                            additional_data['feedback_received'] = feedback_received
+                                        if feedback_received == "Yes":
+                                            additional_data['csat_score'] = csat_score
+                                        
                                         success, message = st.session_state.bot.update_case_status(
                                             selected_case,
                                             update_note,
                                             new_substatus,
-                                            'Web User'
+                                            'Web User',
+                                            additional_data if additional_data else None
                                         )
                                         
                                         if success:
@@ -462,17 +518,18 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 💡 Quick Guide")
 st.sidebar.markdown("""
 **Creating Cases:**
-- Use natural language in chat
-- Fill missing info in Create Case tab
-- Confirm before creation
+- Click "Start New Case" for guided input
+- Or type naturally in chat
+- Complete missing info in Create Case tab
 
-**Updating Cases:**
-- Focus on sub-status changes
-- Each update gets timestamped
-- Latest sub-status = current status
+**Analytics:**
+- "How many WIP cases in EU?"
+- "Smart Connect cases by priority"
+- Use hierarchical dashboard
 
-**Querying:**
-- Use case ID (CASE-0001)
-- View full history
-- Export data
+**Advanced Features:**
+- Date range filtering
+- CSAT scoring
+- Completion tracking
+- Feedback management
 """)
