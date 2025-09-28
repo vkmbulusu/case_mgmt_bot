@@ -368,7 +368,7 @@ class QuickSupportBot:
             return "error"
     
     def create_case_from_data(self, case_data):
-        """Create case in database"""
+        """Create case in database from provided data"""
         # Generate case ID
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -535,3 +535,95 @@ class QuickSupportBot:
             return f"✅ Switched to {tier} model: {self.model}"
         else:
             return f"❌ Invalid tier. Available: {', '.join(MODELS.keys())}"
+
+    # Legacy methods for backward compatibility
+    def process_message(self, user_id, message):
+        """Process user input - legacy method for compatibility"""
+        intent = self.determine_intent(message)
+        
+        if "create" in intent:
+            # Extract information for case creation
+            extracted_data = self.extract_case_info(message)
+            
+            if "error" not in extracted_data:
+                # For legacy compatibility, create case directly
+                try:
+                    case_id, created_case = self.create_case_from_data(extracted_data)
+                    
+                    return f"""✅ **Case Created!**
+                    
+**Case ID:** {case_id}
+**Seller:** {created_case['seller_name']}
+**Marketplace:** {created_case['marketplace']}
+**Issue:** {created_case['issue_type']}
+**Priority:** {created_case['priority']}
+**API:** {created_case['api_supported']}
+
+You can update this case by referencing: {case_id}"""
+                except Exception as e:
+                    return f"❌ Error creating case: {e}"
+            else:
+                return f"❌ Error extracting information: {extracted_data['error']}"
+        
+        elif "update" in intent:
+            # Extract update information
+            update_data = self.extract_update_info(message)
+            
+            if "error" not in update_data and update_data.get('case_id'):
+                success, message = self.update_case_status(
+                    update_data['case_id'],
+                    update_data.get('note', 'Update from chat'),
+                    update_data.get('sub_status', 'Note'),
+                    'Chat User'
+                )
+                
+                if success:
+                    return f"✅ **{message}**\n\n**Note:** {update_data.get('note', 'Update recorded')}\n**Sub-status:** {update_data.get('sub_status', 'Note')}"
+                else:
+                    return f"❌ {message}"
+            else:
+                return "❌ Please specify a valid case ID and update details."
+        
+        elif "query" in intent:
+            # Extract case ID from message
+            words = message.upper().split()
+            case_id = None
+            for word in words:
+                if word.startswith('CASE-'):
+                    case_id = word
+                    break
+            
+            if case_id:
+                case_dict, updates = self.query_case(case_id)
+                
+                if case_dict:
+                    updates_text = ""
+                    if updates:
+                        updates_text = "\n\n**Recent Updates:**"
+                        for note, updated_by, timestamp, sub_status in updates:
+                            date = timestamp.split('T')[0]
+                            updates_text += f"\n• {date}: {note} ({sub_status})"
+                    
+                    return f"""📋 **Case {case_id}**
+
+**Seller:** {case_dict['seller_name']} (ID: {case_dict['seller_id']})
+**Amazon Case ID:** {case_dict.get('amazon_case_id', 'Not provided')}
+**Marketplace:** {case_dict['marketplace']}
+**Issue:** {case_dict['issue_type']}
+**Priority:** {case_dict['priority']} | **Status:** {case_dict['case_status']}
+**Sub-status:** {case_dict.get('last_sub_status', 'None')}
+**API:** {case_dict['api_supported']}
+**Workstream:** {case_dict['workstream']}
+**Specialist:** {case_dict['specialist_name']}
+
+**Notes:** {case_dict.get('notes', 'None')}{updates_text}"""
+                else:
+                    return f"❌ Case {case_id} not found"
+            else:
+                return "❌ Please specify a case ID (e.g., 'show case CASE-0001')"
+        
+        else:
+            return """❓ I'm not sure what you want to do. Try:
+- 'New case for [seller] on [marketplace]'
+- 'Update CASE-0001: [description]'  
+- 'Show case CASE-0001'"""
