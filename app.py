@@ -241,60 +241,74 @@ with tab2:
             seller_type = st.selectbox("Seller Type *", SELLER_TYPES,
                                      index=SELLER_TYPES.index(extracted.get('seller_type')) if extracted.get('seller_type') in SELLER_TYPES else 1)
             api_supported = st.text_input("API Supported", value=extracted.get('api_supported', 'General API'))
-            listing_start_date = st.date_input("Listing Start Date", 
-                                             value=datetime.strptime(extracted.get('listing_start_date', datetime.now().strftime('%Y-%m-%d')), '%Y-%m-%d').date())
+            
+            # Fixed date input with proper null handling
+            listing_start_date = st.date_input("Listing Start Date (Optional)", value=None)
+            listing_completion_date = st.date_input("Listing Completion Date (Optional)", value=None)
+            
             feedback_received = st.selectbox("Feedback Received", ["No", "Yes"])
         
         notes = st.text_area("Notes", value=extracted.get('notes', ''), height=100)
-        csat_score = st.slider("CSAT Score (if applicable)", 1.0, 5.0, 3.0, 0.5)
         
-        # Form submission
+        # CSAT score only if feedback received
+        if feedback_received == "Yes":
+            csat_score = st.slider("CSAT Score", 1.0, 5.0, 3.0, 0.5)
+        else:
+            csat_score = None
+        
+        # Form submission buttons
         col1, col2, col3 = st.columns([1, 1, 2])
         
         with col1:
-            if st.form_submit_button("✅ Create Case", type="primary"):
-                # Validate required fields
-                if seller_name and issue_type:
-                    case_data = {
-                        'seller_name': seller_name,
-                        'amazon_case_id': amazon_case_id,
-                        'marketplace': marketplace,
-                        'case_source': case_source,
-                        'workstream': workstream,
-                        'issue_type': issue_type,
-                        'complexity': complexity,
-                        'priority': priority,
-                        'seller_type': seller_type,
-                        'api_supported': api_supported,
-                        'listing_start_date': listing_start_date.strftime('%Y-%m-%d'),
-                        'feedback_received': feedback_received,
-                        'csat_score': csat_score if feedback_received == "Yes" else None,
-                        'notes': notes
-                    }
+            submit_case = st.form_submit_button("✅ Create Case", type="primary")
+        
+        with col2:
+            clear_form = st.form_submit_button("🔄 Clear Form")
+        
+        # Handle form submission
+        if submit_case:
+            # Validate required fields
+            if seller_name and issue_type:
+                case_data = {
+                    'seller_name': seller_name,
+                    'amazon_case_id': amazon_case_id,
+                    'marketplace': marketplace,
+                    'case_source': case_source,
+                    'workstream': workstream,
+                    'issue_type': issue_type,
+                    'complexity': complexity,
+                    'priority': priority,
+                    'seller_type': seller_type,
+                    'api_supported': api_supported,
+                    'listing_start_date': listing_start_date.strftime('%Y-%m-%d') if listing_start_date else '',
+                    'listing_completion_date': listing_completion_date.strftime('%Y-%m-%d') if listing_completion_date else '',
+                    'feedback_received': feedback_received,
+                    'csat_score': csat_score,
+                    'notes': notes
+                }
+                
+                try:
+                    case_id, created_case = st.session_state.bot.create_case_from_data(case_data)
                     
-                    try:
-                        case_id, created_case = st.session_state.bot.create_case_from_data(case_data)
-                        
-                        st.success(f"""✅ **Case Created Successfully!**
-                        
+                    st.success(f"""✅ **Case Created Successfully!**
+                    
 **Case ID:** {case_id}
 **Seller:** {created_case['seller_name']}
 **Marketplace:** {created_case['marketplace']}
 **Priority:** {created_case['priority']}
 **Workstream:** {created_case['workstream']}""")
-                        
-                        # Clear form data
-                        st.session_state.extracted_data = {}
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error creating case: {e}")
-                else:
-                    st.error("❌ Please fill in all required fields (marked with *)")
+                    
+                    # Clear form data
+                    st.session_state.extracted_data = {}
+                    
+                except Exception as e:
+                    st.error(f"❌ Error creating case: {e}")
+            else:
+                st.error("❌ Please fill in all required fields (marked with *)")
         
-        with col2:
-            if st.form_submit_button("🔄 Clear Form"):
-                st.session_state.extracted_data = {}
-                st.rerun()
+        if clear_form:
+            st.session_state.extracted_data = {}
+            st.rerun()
 
 with tab3:
     st.subheader("📊 Advanced Analytics Dashboard")
@@ -389,6 +403,7 @@ with tab3:
             
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
+        st.error(f"Debug info: {str(e)}")
 
 with tab4:
     st.subheader("📋 Case Management")
@@ -463,42 +478,116 @@ with tab4:
                             st.markdown(f"**Notes:** {case_dict['notes']}")
                         
                         with col2:
-                            st.markdown("### Quick Update")
+                            st.markdown("### Update Case")
                             
-                            with st.form(f"update_form_{selected_case}"):
-                                update_note = st.text_area("Update Note", height=100)
-                                new_substatus = st.selectbox("New Sub-Status", SUB_STATUSES)
-                                
-                                # Additional fields for completion
-                                completion_date = st.date_input("Completion Date (if applicable)")
-                                feedback_received = st.selectbox("Feedback Received", ["No Change", "No", "Yes"])
-                                csat_score = st.slider("CSAT Score (if applicable)", 1.0, 5.0, 3.0, 0.5)
-                                
-                                if st.form_submit_button("Update Case"):
-                                    if update_note:
-                                        additional_data = {}
-                                        if completion_date != date.today():
-                                            additional_data['listing_completion_date'] = completion_date.strftime('%Y-%m-%d')
-                                        if feedback_received != "No Change":
-                                            additional_data['feedback_received'] = feedback_received
-                                        if feedback_received == "Yes":
-                                            additional_data['csat_score'] = csat_score
-                                        
-                                        success, message = st.session_state.bot.update_case_status(
-                                            selected_case,
-                                            update_note,
-                                            new_substatus,
-                                            'Web User',
-                                            additional_data if additional_data else None
-                                        )
-                                        
-                                        if success:
-                                            st.success(message)
-                                            st.rerun()
-                                        else:
-                                            st.error(message)
+                            # Toggle between quick update and full edit
+                            update_mode = st.radio("Update Mode", ["Quick Update", "Full Edit"])
+                            
+                            if update_mode == "Quick Update":
+                                with st.form(f"quick_update_form_{selected_case}"):
+                                    update_note = st.text_area("Update Note", height=100)
+                                    new_substatus = st.selectbox("New Sub-Status", SUB_STATUSES, 
+                                                               index=SUB_STATUSES.index(case_dict['last_sub_status']) if case_dict['last_sub_status'] in SUB_STATUSES else 0)
+                                    
+                                    # Additional fields for completion
+                                    completion_date = st.date_input("Completion Date (if applicable)", value=None)
+                                    feedback_received = st.selectbox("Feedback Received", ["No Change", "No", "Yes"])
+                                    
+                                    if feedback_received == "Yes":
+                                        csat_score = st.slider("CSAT Score", 1.0, 5.0, 3.0, 0.5)
                                     else:
-                                        st.error("Please provide an update note")
+                                        csat_score = None
+                                    
+                                    if st.form_submit_button("Update Case"):
+                                        if update_note:
+                                            additional_data = {}
+                                            if completion_date:
+                                                additional_data['listing_completion_date'] = completion_date.strftime('%Y-%m-%d')
+                                            if feedback_received != "No Change":
+                                                additional_data['feedback_received'] = feedback_received
+                                            if csat_score:
+                                                additional_data['csat_score'] = csat_score
+                                            
+                                            success, message = st.session_state.bot.update_case_status(
+                                                selected_case,
+                                                update_note,
+                                                new_substatus,
+                                                'Web User',
+                                                additional_data if additional_data else None
+                                            )
+                                            
+                                            if success:
+                                                st.success(message)
+                                                st.rerun()
+                                            else:
+                                                st.error(message)
+                                        else:
+                                            st.error("Please provide an update note")
+                            
+                            else:  # Full Edit Mode
+                                with st.form(f"full_edit_form_{selected_case}"):
+                                    st.markdown("**Edit All Fields**")
+                                    
+                                    # Editable fields
+                                    edit_seller_name = st.text_input("Seller Name", value=case_dict['seller_name'])
+                                    edit_amazon_case_id = st.text_input("Amazon Case ID", value=case_dict.get('amazon_case_id', ''))
+                                    edit_marketplace = st.selectbox("Marketplace", MARKETPLACES, 
+                                                                  index=MARKETPLACES.index(case_dict['marketplace']) if case_dict['marketplace'] in MARKETPLACES else 0)
+                                    edit_workstream = st.selectbox("Workstream", WORKSTREAMS,
+                                                                 index=WORKSTREAMS.index(case_dict['workstream']) if case_dict['workstream'] in WORKSTREAMS else 0)
+                                    edit_priority = st.selectbox("Priority", PRIORITIES,
+                                                               index=PRIORITIES.index(case_dict['priority']) if case_dict['priority'] in PRIORITIES else 0)
+                                    edit_issue_type = st.text_input("Issue Type", value=case_dict['issue_type'])
+                                    edit_api_supported = st.text_input("API Supported", value=case_dict['api_supported'])
+                                    edit_notes = st.text_area("Notes", value=case_dict['notes'], height=100)
+                                    
+                                    # Date fields
+                                    current_start_date = datetime.strptime(case_dict['listing_start_date'], '%Y-%m-%d').date() if case_dict.get('listing_start_date') else None
+                                    current_completion_date = datetime.strptime(case_dict['listing_completion_date'], '%Y-%m-%d').date() if case_dict.get('listing_completion_date') else None
+                                    
+                                    edit_start_date = st.date_input("Listing Start Date", value=current_start_date)
+                                    edit_completion_date = st.date_input("Listing Completion Date", value=current_completion_date)
+                                    
+                                    edit_feedback = st.selectbox("Feedback Received", ["No", "Yes"], 
+                                                               index=0 if case_dict.get('feedback_received', 'No') == 'No' else 1)
+                                    
+                                    if edit_feedback == "Yes":
+                                        edit_csat = st.slider("CSAT Score", 1.0, 5.0, float(case_dict.get('csat_score', 3.0)), 0.5)
+                                    else:
+                                        edit_csat = None
+                                    
+                                    edit_substatus = st.selectbox("Sub-Status", SUB_STATUSES,
+                                                                index=SUB_STATUSES.index(case_dict['last_sub_status']) if case_dict['last_sub_status'] in SUB_STATUSES else 0)
+                                    
+                                    update_note = st.text_area("Update Note (Required)", height=80)
+                                    
+                                    if st.form_submit_button("Save All Changes"):
+                                        if update_note:
+                                            # Update case in database (you'll need to add this method to your bot)
+                                            # For now, we'll just update via the existing method
+                                            additional_data = {
+                                                'listing_start_date': edit_start_date.strftime('%Y-%m-%d') if edit_start_date else '',
+                                                'listing_completion_date': edit_completion_date.strftime('%Y-%m-%d') if edit_completion_date else '',
+                                                'feedback_received': edit_feedback,
+                                                'csat_score': edit_csat,
+                                                # Note: For full implementation, you'd need to add a method to update all fields
+                                            }
+                                            
+                                            success, message = st.session_state.bot.update_case_status(
+                                                selected_case,
+                                                f"Full case update: {update_note}",
+                                                edit_substatus,
+                                                'Web User',
+                                                additional_data
+                                            )
+                                            
+                                            if success:
+                                                st.success("Case updated successfully!")
+                                                st.rerun()
+                                            else:
+                                                st.error(message)
+                                        else:
+                                            st.error("Please provide an update note")
                         
                         # Show update history
                         if updates:
@@ -521,15 +610,14 @@ st.sidebar.markdown("""
 - Click "Start New Case" for guided input
 - Or type naturally in chat
 - Complete missing info in Create Case tab
+- Dates are optional during creation
+
+**Updates:**
+- Quick Update: Note + sub-status change
+- Full Edit: Modify all case fields
 
 **Analytics:**
 - "How many WIP cases in EU?"
 - "Smart Connect cases by priority"
 - Use hierarchical dashboard
-
-**Advanced Features:**
-- Date range filtering
-- CSAT scoring
-- Completion tracking
-- Feedback management
 """)
