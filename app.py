@@ -449,37 +449,72 @@ with tab3:
                 st.subheader("Cases by API")
                 api_counts = filtered_df['api_supported'].value_counts()
                 st.bar_chart(api_counts)
-            
-            # Specialist Performance Chart
+                        # Specialist Performance Chart
             st.markdown("### 👥 Specialist Performance")
             
             try:
                 specialist_df = st.session_state.bot.get_specialist_case_counts()
                 
                 if not specialist_df.empty:
-                    # Create pivot table for better visualization
-                    pivot_df = specialist_df.pivot(index=['specialist_id', 'specialist_name'], 
-                                                 columns='case_status', 
-                                                 values='count').fillna(0)
+                    # Create pivot table with single index
+                    pivot_df = specialist_df.pivot_table(
+                        index='specialist_id', 
+                        columns='case_status', 
+                        values='count',
+                        fill_value=0,
+                        aggfunc='sum'
+                    )
                     
                     # Display as stacked bar chart
                     st.bar_chart(pivot_df)
                     
+                    # Show specialist names mapping
+                    specialist_names = specialist_df[['specialist_id', 'specialist_name']].drop_duplicates()
+                    st.markdown("**Specialist Mapping:**")
+                    for _, row in specialist_names.iterrows():
+                        st.markdown(f"• **{row['specialist_id']}**: {row['specialist_name']}")
+                    
                     # Also show as detailed table
                     with st.expander("📋 Detailed Specialist Breakdown"):
-                        st.dataframe(specialist_df, use_container_width=True)
+                        # Create a summary table
+                        summary_df = specialist_df.groupby(['specialist_id', 'specialist_name', 'case_status'])['count'].sum().reset_index()
+                        
+                        # Add total column
+                        totals = summary_df.groupby(['specialist_id', 'specialist_name'])['count'].sum().reset_index()
+                        totals['case_status'] = 'TOTAL'
+                        
+                        # Combine and display
+                        full_summary = pd.concat([summary_df, totals], ignore_index=True)
+                        st.dataframe(full_summary, use_container_width=True)
+                        
+                        # Alternative chart view by specialist
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader("Total Cases per Specialist")
+                            specialist_totals = specialist_df.groupby('specialist_id')['count'].sum()
+                            st.bar_chart(specialist_totals)
+                        
+                        with col2:
+                            st.subheader("Case Status Distribution")
+                            status_totals = specialist_df.groupby('case_status')['count'].sum()
+                            st.bar_chart(status_totals)
                 else:
                     st.info("No specialist data available.")
                     
             except Exception as e:
                 st.error(f"Error loading specialist data: {e}")
-            
-        else:
-            st.info("No cases found for the selected date range.")
-            
-    except Exception as e:
-        st.error(f"Error loading dashboard: {e}")
-        st.error(f"Debug info: {str(e)}")
+                # Debug information
+                with st.expander("🔍 Debug Info"):
+                    st.write("Error details:", str(e))
+                    try:
+                        specialist_df = st.session_state.bot.get_specialist_case_counts()
+                        st.write("Data shape:", specialist_df.shape if not specialist_df.empty else "Empty DataFrame")
+                        st.write("Columns:", list(specialist_df.columns) if not specialist_df.empty else "No columns")
+                        if not specialist_df.empty:
+                            st.dataframe(specialist_df.head())
+                    except Exception as debug_e:
+                        st.write("Debug error:", str(debug_e))
 
 with tab4:
     st.subheader("📋 Case Management")
