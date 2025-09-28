@@ -242,7 +242,7 @@ with tab2:
                                      index=SELLER_TYPES.index(extracted.get('seller_type')) if extracted.get('seller_type') in SELLER_TYPES else 1)
             api_supported = st.text_input("API Supported", value=extracted.get('api_supported', 'General API'))
             
-            # Fixed date input with proper null handling
+            # Date inputs with proper null handling
             listing_start_date = st.date_input("Listing Start Date (Optional)", value=None)
             listing_completion_date = st.date_input("Listing Completion Date (Optional)", value=None)
             
@@ -449,72 +449,48 @@ with tab3:
                 st.subheader("Cases by API")
                 api_counts = filtered_df['api_supported'].value_counts()
                 st.bar_chart(api_counts)
-                        # Specialist Performance Chart
+            
+            # Simplified Specialist Performance Chart
             st.markdown("### 👥 Specialist Performance")
             
             try:
-                specialist_df = st.session_state.bot.get_specialist_case_counts()
+                # Create specialist data from the main dataframe
+                specialist_data = filtered_df.groupby(['specialist_id', 'case_status']).size().reset_index(name='count')
                 
-                if not specialist_df.empty:
-                    # Create pivot table with single index
-                    pivot_df = specialist_df.pivot_table(
-                        index='specialist_id', 
-                        columns='case_status', 
-                        values='count',
-                        fill_value=0,
-                        aggfunc='sum'
-                    )
+                if not specialist_data.empty:
+                    # Create simple pivot table
+                    specialist_pivot = specialist_data.pivot(index='specialist_id', columns='case_status', values='count').fillna(0)
                     
                     # Display as stacked bar chart
-                    st.bar_chart(pivot_df)
+                    st.bar_chart(specialist_pivot)
                     
-                    # Show specialist names mapping
-                    specialist_names = specialist_df[['specialist_id', 'specialist_name']].drop_duplicates()
-                    st.markdown("**Specialist Mapping:**")
-                    for _, row in specialist_names.iterrows():
-                        st.markdown(f"• **{row['specialist_id']}**: {row['specialist_name']}")
+                    # Show totals per specialist
+                    col1, col2 = st.columns(2)
                     
-                    # Also show as detailed table
+                    with col1:
+                        st.subheader("Total Cases per Specialist")
+                        specialist_totals = filtered_df['specialist_id'].value_counts()
+                        st.bar_chart(specialist_totals)
+                    
+                    with col2:
+                        st.subheader("Case Status Distribution")
+                        status_totals = filtered_df['case_status'].value_counts()
+                        st.bar_chart(status_totals)
+                    
+                    # Detailed breakdown table
                     with st.expander("📋 Detailed Specialist Breakdown"):
-                        # Create a summary table
-                        summary_df = specialist_df.groupby(['specialist_id', 'specialist_name', 'case_status'])['count'].sum().reset_index()
-                        
-                        # Add total column
-                        totals = summary_df.groupby(['specialist_id', 'specialist_name'])['count'].sum().reset_index()
-                        totals['case_status'] = 'TOTAL'
-                        
-                        # Combine and display
-                        full_summary = pd.concat([summary_df, totals], ignore_index=True)
-                        st.dataframe(full_summary, use_container_width=True)
-                        
-                        # Alternative chart view by specialist
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.subheader("Total Cases per Specialist")
-                            specialist_totals = specialist_df.groupby('specialist_id')['count'].sum()
-                            st.bar_chart(specialist_totals)
-                        
-                        with col2:
-                            st.subheader("Case Status Distribution")
-                            status_totals = specialist_df.groupby('case_status')['count'].sum()
-                            st.bar_chart(status_totals)
+                        st.dataframe(specialist_data, use_container_width=True)
                 else:
-                    st.info("No specialist data available.")
+                    st.info("No specialist data available for the current filters.")
                     
             except Exception as e:
                 st.error(f"Error loading specialist data: {e}")
-                # Debug information
-                with st.expander("🔍 Debug Info"):
-                    st.write("Error details:", str(e))
-                    try:
-                        specialist_df = st.session_state.bot.get_specialist_case_counts()
-                        st.write("Data shape:", specialist_df.shape if not specialist_df.empty else "Empty DataFrame")
-                        st.write("Columns:", list(specialist_df.columns) if not specialist_df.empty else "No columns")
-                        if not specialist_df.empty:
-                            st.dataframe(specialist_df.head())
-                    except Exception as debug_e:
-                        st.write("Debug error:", str(debug_e))
+            
+        else:
+            st.info("No cases found for the selected date range.")
+            
+    except Exception as e:
+        st.error(f"Error loading dashboard: {e}")
 
 with tab4:
     st.subheader("📋 Case Management")
@@ -583,120 +559,53 @@ with tab4:
                                 st.markdown(f"**API:** {case_dict['api_supported']}")
                                 st.markdown(f"**Workstream:** {case_dict['workstream']}")
                                 st.markdown(f"**Sub-status:** {case_dict['last_sub_status']}")
+                                st.markdown(f"**Specialist:** {case_dict['specialist_id']}")
                                 st.markdown(f"**Feedback:** {case_dict.get('feedback_received', 'No')}")
-                                st.markdown(f"**CSAT:** {case_dict.get('csat_score', 'Not rated')}")
                             
                             st.markdown(f"**Notes:** {case_dict['notes']}")
                         
                         with col2:
                             st.markdown("### Update Case")
                             
-                            # Toggle between quick update and full edit
-                            update_mode = st.radio("Update Mode", ["Quick Update", "Full Edit"])
-                            
-                            if update_mode == "Quick Update":
-                                with st.form(f"quick_update_form_{selected_case}"):
-                                    update_note = st.text_area("Update Note", height=100)
-                                    new_substatus = st.selectbox("New Sub-Status", SUB_STATUSES, 
-                                                               index=SUB_STATUSES.index(case_dict['last_sub_status']) if case_dict['last_sub_status'] in SUB_STATUSES else 0)
-                                    
-                                    # Additional fields for completion
-                                    completion_date = st.date_input("Completion Date (if applicable)", value=None)
-                                    feedback_received = st.selectbox("Feedback Received", ["No Change", "No", "Yes"])
-                                    
-                                    if feedback_received == "Yes":
-                                        csat_score = st.slider("CSAT Score", 1.0, 5.0, 3.0, 0.5)
-                                    else:
-                                        csat_score = None
-                                    
-                                    if st.form_submit_button("Update Case"):
-                                        if update_note:
-                                            additional_data = {}
-                                            if completion_date:
-                                                additional_data['listing_completion_date'] = completion_date.strftime('%Y-%m-%d')
-                                            if feedback_received != "No Change":
-                                                additional_data['feedback_received'] = feedback_received
-                                            if csat_score:
-                                                additional_data['csat_score'] = csat_score
-                                            
-                                            success, message = st.session_state.bot.update_case_status(
-                                                selected_case,
-                                                update_note,
-                                                new_substatus,
-                                                'Web User',
-                                                additional_data if additional_data else None
-                                            )
-                                            
-                                            if success:
-                                                st.success(message)
-                                                st.rerun()
-                                            else:
-                                                st.error(message)
+                            with st.form(f"update_form_{selected_case}"):
+                                update_note = st.text_area("Update Note", height=100)
+                                new_substatus = st.selectbox("New Sub-Status", SUB_STATUSES, 
+                                                           index=SUB_STATUSES.index(case_dict['last_sub_status']) if case_dict['last_sub_status'] in SUB_STATUSES else 0)
+                                
+                                # Additional fields
+                                completion_date = st.date_input("Completion Date (if applicable)", value=None)
+                                feedback_received = st.selectbox("Feedback Received", ["No Change", "No", "Yes"])
+                                
+                                if feedback_received == "Yes":
+                                    csat_score = st.slider("CSAT Score", 1.0, 5.0, 3.0, 0.5)
+                                else:
+                                    csat_score = None
+                                
+                                if st.form_submit_button("Update Case"):
+                                    if update_note:
+                                        additional_data = {}
+                                        if completion_date:
+                                            additional_data['listing_completion_date'] = completion_date.strftime('%Y-%m-%d')
+                                        if feedback_received != "No Change":
+                                            additional_data['feedback_received'] = feedback_received
+                                        if csat_score:
+                                            additional_data['csat_score'] = csat_score
+                                        
+                                        success, message = st.session_state.bot.update_case_status(
+                                            selected_case,
+                                            update_note,
+                                            new_substatus,
+                                            'Web User',
+                                            additional_data if additional_data else None
+                                        )
+                                        
+                                        if success:
+                                            st.success(message)
+                                            st.rerun()
                                         else:
-                                            st.error("Please provide an update note")
-                            
-                            else:  # Full Edit Mode
-                                with st.form(f"full_edit_form_{selected_case}"):
-                                    st.markdown("**Edit All Fields**")
-                                    
-                                    # Editable fields
-                                    edit_seller_name = st.text_input("Seller Name", value=case_dict['seller_name'])
-                                    edit_amazon_case_id = st.text_input("Amazon Case ID", value=case_dict.get('amazon_case_id', ''))
-                                    edit_marketplace = st.selectbox("Marketplace", MARKETPLACES, 
-                                                                  index=MARKETPLACES.index(case_dict['marketplace']) if case_dict['marketplace'] in MARKETPLACES else 0)
-                                    edit_workstream = st.selectbox("Workstream", WORKSTREAMS,
-                                                                 index=WORKSTREAMS.index(case_dict['workstream']) if case_dict['workstream'] in WORKSTREAMS else 0)
-                                    edit_priority = st.selectbox("Priority", PRIORITIES,
-                                                               index=PRIORITIES.index(case_dict['priority']) if case_dict['priority'] in PRIORITIES else 0)
-                                    edit_issue_type = st.text_input("Issue Type", value=case_dict['issue_type'])
-                                    edit_api_supported = st.text_input("API Supported", value=case_dict['api_supported'])
-                                    edit_notes = st.text_area("Notes", value=case_dict['notes'], height=100)
-                                    
-                                    # Date fields
-                                    current_start_date = datetime.strptime(case_dict['listing_start_date'], '%Y-%m-%d').date() if case_dict.get('listing_start_date') else None
-                                    current_completion_date = datetime.strptime(case_dict['listing_completion_date'], '%Y-%m-%d').date() if case_dict.get('listing_completion_date') else None
-                                    
-                                    edit_start_date = st.date_input("Listing Start Date", value=current_start_date)
-                                    edit_completion_date = st.date_input("Listing Completion Date", value=current_completion_date)
-                                    
-                                    edit_feedback = st.selectbox("Feedback Received", ["No", "Yes"], 
-                                                               index=0 if case_dict.get('feedback_received', 'No') == 'No' else 1)
-                                    
-                                    if edit_feedback == "Yes":
-                                        edit_csat = st.slider("CSAT Score", 1.0, 5.0, float(case_dict.get('csat_score', 3.0)), 0.5)
+                                            st.error(message)
                                     else:
-                                        edit_csat = None
-                                    
-                                    edit_substatus = st.selectbox("Sub-Status", SUB_STATUSES,
-                                                                index=SUB_STATUSES.index(case_dict['last_sub_status']) if case_dict['last_sub_status'] in SUB_STATUSES else 0)
-                                    
-                                    update_note = st.text_area("Update Note (Required)", height=80)
-                                    
-                                    if st.form_submit_button("Save All Changes"):
-                                        if update_note:
-                                            # Update case in database
-                                            additional_data = {
-                                                'listing_start_date': edit_start_date.strftime('%Y-%m-%d') if edit_start_date else '',
-                                                'listing_completion_date': edit_completion_date.strftime('%Y-%m-%d') if edit_completion_date else '',
-                                                'feedback_received': edit_feedback,
-                                                'csat_score': edit_csat,
-                                            }
-                                            
-                                            success, message = st.session_state.bot.update_case_status(
-                                                selected_case,
-                                                f"Full case update: {update_note}",
-                                                edit_substatus,
-                                                'Web User',
-                                                additional_data
-                                            )
-                                            
-                                            if success:
-                                                st.success("Case updated successfully!")
-                                                st.rerun()
-                                            else:
-                                                st.error(message)
-                                        else:
-                                            st.error("Please provide an update note")
+                                        st.error("Please provide an update note")
                         
                         # Show update history
                         if updates:
@@ -719,7 +628,6 @@ st.sidebar.markdown("""
 - Click "Start New Case" for guided input
 - Or type naturally in chat
 - Complete missing info in Create Case tab
-- Dates are optional during creation
 
 **Analytics Queries:**
 - "How many WIP cases?"
@@ -727,12 +635,12 @@ st.sidebar.markdown("""
 - "Smart Connect workstream stats"
 
 **Updates:**
-- Quick Update: Note + sub-status change
-- Full Edit: Modify all case fields
+- Select case and add update notes
+- Change sub-status as needed
+- Track completion and feedback
 
 **Dashboard:**
 - Hierarchical table view
 - Multiple filters available
-- Export to CSV
-- Specialist performance charts
+- Export to CSV functionality
 """)
