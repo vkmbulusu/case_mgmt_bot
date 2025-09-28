@@ -239,6 +239,32 @@ class QuickSupportBot:
                 'last_sub_status': 'INT_START',
                 'created_at': '2024-01-12T14:00:00',
                 'updated_at': datetime.now().isoformat()
+            },
+            {
+                'case_id': 'CASE-0004',
+                'amazon_case_id': 'AMZ-22222222',
+                'seller_id': 22222,
+                'seller_name': 'Fashion Hub',
+                'specialist_id': 'SPEC003',
+                'specialist_name': 'Carol Wilson',
+                'marketplace': 'EU5',
+                'case_source': 'WINSTON',
+                'case_status': 'ON-HOLD',
+                'workstream': 'LUXURY STORE',
+                'listing_start_date': '2024-01-08',
+                'listing_completion_date': '',
+                'issue_type': 'Brand Registry',
+                'complexity': 'Medium',
+                'priority': 'Low',
+                'api_supported': 'General API',
+                'integration_type': 'REST API',
+                'seller_type': 'EXISTING',
+                'feedback_received': 'No',
+                'csat_score': None,
+                'notes': 'Waiting for brand registry approval',
+                'last_sub_status': 'ON_HOLD',
+                'created_at': '2024-01-08T11:00:00',
+                'updated_at': datetime.now().isoformat()
             }
         ]
         
@@ -254,6 +280,7 @@ class QuickSupportBot:
             ('CASE-0001', 'API key validated successfully', 'Alice Johnson', 'PMA'),
             ('CASE-0002', 'Issue resolved and handed over to seller', 'Bob Smith', 'HANDOVER'),
             ('CASE-0003', 'Integration started for new seller', 'Alice Johnson', 'INT_START'),
+            ('CASE-0004', 'Case put on hold pending brand registry', 'Carol Wilson', 'ON_HOLD'),
         ]
         
         for case_id, note, updated_by, sub_status in test_updates:
@@ -369,7 +396,24 @@ class QuickSupportBot:
             return {"error": str(e)}
     
     def determine_intent(self, text):
-        """Determine user intent"""
+        """Determine user intent - improved analytics detection"""
+        # Keywords that strongly indicate analytics queries
+        analytics_keywords = [
+            'how many', 'count', 'total', 'number of', 'show me', 'list', 'breakdown',
+            'statistics', 'stats', 'analytics', 'analysis', 'summary', 'report',
+            'cases by', 'cases in', 'cases with', 'distribution', 'overview'
+        ]
+        
+        # Check for analytics keywords first
+        text_lower = text.lower()
+        if any(keyword in text_lower for keyword in analytics_keywords):
+            return "analytics"
+        
+        # Check for specific case ID pattern
+        if 'CASE-' in text.upper():
+            return "query"
+        
+        # Use AI for ambiguous cases
         prompt = f"""
         Analyze this text and determine the intent:
         
@@ -379,14 +423,14 @@ class QuickSupportBot:
         
         - "create" if this is about a new issue or case
         - "update" if this is about updating an existing case
-        - "query" if this is asking for information about a specific case
+        - "query" if this is asking for information about a specific case (contains CASE-ID)
         - "analytics" if this is asking for statistics, counts, or analysis across multiple cases
         
-        Examples of analytics queries:
-        - "How many cases are in WIP?"
-        - "Show me EU marketplace cases"
-        - "Count of Smart Connect cases"
-        - "Cases by priority"
+        Examples:
+        - "How many WIP cases?" = analytics
+        - "Show case CASE-0001" = query
+        - "Update CASE-0001: resolved" = update
+        - "New case for seller" = create
         """
         
         try:
@@ -418,8 +462,9 @@ class QuickSupportBot:
         - marketplace: {', '.join(MARKETPLACES)}
         - workstream: {', '.join(WORKSTREAMS)}
         - priority: {', '.join(PRIORITIES)}
-        - sub_status: {', '.join(SUB_STATUSES)}
+        - last_sub_status: {', '.join(SUB_STATUSES)}
         - seller_type: {', '.join(SELLER_TYPES)}
+        - specialist_id: SPEC001, SPEC002, SPEC003
         
         Return JSON with filters and grouping:
         {{
@@ -428,9 +473,10 @@ class QuickSupportBot:
                 "marketplace": ["EU"] or null,
                 "workstream": ["STRATEGIC_PRODUCT_SMART_CONNECT_EU"] or null,
                 "priority": ["High"] or null,
-                "sub_status": ["INT_WIP"] or null
+                "last_sub_status": ["INT_WIP"] or null,
+                "specialist_id": ["SPEC001"] or null
             }},
-            "group_by": "case_status" or "marketplace" or "workstream" or null,
+            "group_by": "case_status" or "marketplace" or "workstream" or "specialist_id" or null,
             "description": "human readable description of what is being analyzed"
         }}
         
@@ -546,7 +592,7 @@ class QuickSupportBot:
             'case_source': case_data.get('case_source', 'ASTRO'),
             'case_status': 'SUBMITTED',
             'workstream': case_data.get('workstream', 'DSR'),
-            'listing_start_date': case_data.get('listing_start_date', datetime.now().strftime('%Y-%m-%d')),
+            'listing_start_date': case_data.get('listing_start_date', ''),
             'listing_completion_date': case_data.get('listing_completion_date', ''),
             'issue_type': case_data.get('issue_type', 'General Issue'),
             'complexity': case_data.get('complexity', 'Medium'),
@@ -702,7 +748,7 @@ class QuickSupportBot:
         return cases
     
     def get_hierarchical_data(self, listing_start_date=None, listing_end_date=None, created_start_date=None, created_end_date=None):
-        """Get hierarchical case data with date filters"""
+        """Get hierarchical case data with all required columns"""
         conn = sqlite3.connect(self.db_path)
         
         # Build date filters
@@ -710,7 +756,7 @@ class QuickSupportBot:
         params = []
         
         if listing_start_date and listing_end_date:
-            where_conditions.append("listing_start_date BETWEEN ? AND ?")
+            where_conditions.append("(listing_start_date BETWEEN ? AND ? OR listing_start_date = '')")
             params.extend([listing_start_date, listing_end_date])
         
         if created_start_date and created_end_date:
@@ -721,19 +767,46 @@ class QuickSupportBot:
         
         query = f"""
         SELECT 
+            case_id,
+            seller_id,
+            seller_name,
+            specialist_id,
+            specialist_name,
             workstream,
             marketplace,
             issue_type,
             api_supported,
+            case_status,
             last_sub_status,
-            COUNT(*) as count
+            priority,
+            created_at,
+            listing_start_date
         FROM cases 
         WHERE {where_clause}
-        GROUP BY workstream, marketplace, issue_type, api_supported, last_sub_status
         ORDER BY workstream, marketplace, issue_type, api_supported, last_sub_status
         """
         
         df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        return df
+    
+    def get_specialist_case_counts(self):
+        """Get case counts by specialist and status"""
+        conn = sqlite3.connect(self.db_path)
+        
+        query = """
+        SELECT 
+            specialist_id,
+            specialist_name,
+            case_status,
+            COUNT(*) as count
+        FROM cases 
+        GROUP BY specialist_id, specialist_name, case_status
+        ORDER BY specialist_id, case_status
+        """
+        
+        df = pd.read_sql_query(query, conn)
         conn.close()
         
         return df
@@ -748,7 +821,7 @@ class QuickSupportBot:
 
     # Enhanced legacy method for backward compatibility
     def process_message(self, user_id, message):
-        """Process user input - enhanced with analytics"""
+        """Process user input - enhanced with improved analytics"""
         intent = self.determine_intent(message)
         
         if "create" in intent:
@@ -837,7 +910,7 @@ You can update this case by referencing: {case_id}"""
 **Sub-status:** {case_dict.get('last_sub_status', 'None')}
 **API:** {case_dict['api_supported']}
 **Workstream:** {case_dict['workstream']}
-**Specialist:** {case_dict['specialist_name']}
+**Specialist:** {case_dict['specialist_name']} ({case_dict['specialist_id']})
 **Listing Start:** {case_dict.get('listing_start_date', 'Not set')}
 **Listing Complete:** {case_dict.get('listing_completion_date', 'Not completed')}
 **Feedback:** {case_dict.get('feedback_received', 'No')}
