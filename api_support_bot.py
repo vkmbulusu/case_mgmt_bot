@@ -2,6 +2,7 @@ import sqlite3
 import json
 from openai import OpenAI
 from datetime import datetime, timedelta
+import pandas as pd
 import random
 
 # OpenRouter Configuration
@@ -89,20 +90,20 @@ class QuickSupportBot:
         self.populate_test_data()
     
     def setup_database(self):
-        """Create database and tables with updated schema"""
+        """Create database and tables with complete schema"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Check if we need to add the new column
+        # Check if we need to update the schema
         cursor.execute("PRAGMA table_info(cases)")
         columns = [column[1] for column in cursor.fetchall()]
         
-        if 'amazon_case_id' not in columns:
-            # Drop and recreate table with new schema
+        if 'amazon_case_id' not in columns or 'feedback_received' not in columns:
+            # Drop and recreate table with complete schema
             cursor.execute("DROP TABLE IF EXISTS cases")
             cursor.execute("DROP TABLE IF EXISTS updates")
         
-        # Cases table with updated schema
+        # Complete cases table schema
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS cases (
                 case_id TEXT PRIMARY KEY,
@@ -123,7 +124,7 @@ class QuickSupportBot:
                 api_supported TEXT NOT NULL,
                 integration_type TEXT NOT NULL,
                 seller_type TEXT NOT NULL,
-                feedback_received INTEGER NOT NULL,
+                feedback_received TEXT DEFAULT 'No',
                 csat_score REAL,
                 notes TEXT,
                 last_sub_status TEXT,
@@ -159,7 +160,7 @@ class QuickSupportBot:
             conn.close()
             return
         
-        # Sample test data with new schema
+        # Sample test data with complete schema
         test_cases = [
             {
                 'case_id': 'CASE-0001',
@@ -180,11 +181,11 @@ class QuickSupportBot:
                 'api_supported': 'Product API',
                 'integration_type': 'REST API',
                 'seller_type': 'EXISTING',
-                'feedback_received': 0,
+                'feedback_received': 'No',
                 'csat_score': None,
                 'notes': 'Seller having trouble with API key authentication',
                 'last_sub_status': 'INT_WIP',
-                'created_at': datetime.now().isoformat(),
+                'created_at': '2024-01-15T10:00:00',
                 'updated_at': datetime.now().isoformat()
             },
             {
@@ -196,7 +197,7 @@ class QuickSupportBot:
                 'specialist_name': 'Bob Smith',
                 'marketplace': 'NA',
                 'case_source': 'WINSTON',
-                'case_status': 'ON-HOLD',
+                'case_status': 'COMPLETED',
                 'workstream': 'DSR',
                 'listing_start_date': '2024-01-10',
                 'listing_completion_date': '2024-01-20',
@@ -206,11 +207,37 @@ class QuickSupportBot:
                 'api_supported': 'Inventory API',
                 'integration_type': 'Webhook',
                 'seller_type': 'EXISTING',
-                'feedback_received': 1,
+                'feedback_received': 'Yes',
                 'csat_score': 4.5,
-                'notes': 'Inventory not syncing properly, causing oversells',
-                'last_sub_status': 'ON_HOLD',
-                'created_at': datetime.now().isoformat(),
+                'notes': 'Inventory sync issue resolved successfully',
+                'last_sub_status': 'HANDOVER',
+                'created_at': '2024-01-10T09:00:00',
+                'updated_at': datetime.now().isoformat()
+            },
+            {
+                'case_id': 'CASE-0003',
+                'amazon_case_id': 'AMZ-11111111',
+                'seller_id': 11111,
+                'seller_name': 'SmartConnect Store',
+                'specialist_id': 'SPEC001',
+                'specialist_name': 'Alice Johnson',
+                'marketplace': 'EU',
+                'case_source': 'ASTRO',
+                'case_status': 'WIP',
+                'workstream': 'STRATEGIC_PRODUCT_SMART_CONNECT_EU',
+                'listing_start_date': '2024-01-12',
+                'listing_completion_date': '',
+                'issue_type': 'Integration Setup',
+                'complexity': 'Easy',
+                'priority': 'Medium',
+                'api_supported': 'Orders API',
+                'integration_type': 'REST API',
+                'seller_type': 'NEW',
+                'feedback_received': 'No',
+                'csat_score': None,
+                'notes': 'New seller onboarding for Smart Connect',
+                'last_sub_status': 'INT_START',
+                'created_at': '2024-01-12T14:00:00',
                 'updated_at': datetime.now().isoformat()
             }
         ]
@@ -225,7 +252,8 @@ class QuickSupportBot:
         test_updates = [
             ('CASE-0001', 'Seller provided API credentials for testing', 'Alice Johnson', 'INT_WIP'),
             ('CASE-0001', 'API key validated successfully', 'Alice Johnson', 'PMA'),
-            ('CASE-0002', 'Identified webhook timeout issue', 'Bob Smith', 'ON_HOLD'),
+            ('CASE-0002', 'Issue resolved and handed over to seller', 'Bob Smith', 'HANDOVER'),
+            ('CASE-0003', 'Integration started for new seller', 'Alice Johnson', 'INT_START'),
         ]
         
         for case_id, note, updated_by, sub_status in test_updates:
@@ -254,6 +282,7 @@ class QuickSupportBot:
             "priority": "one of: {', '.join(PRIORITIES)}",
             "seller_type": "one of: {', '.join(SELLER_TYPES)}",
             "api_supported": "Product API/Inventory API/Orders API/Payment API/General API",
+            "listing_start_date": "YYYY-MM-DD format if mentioned",
             "notes": "detailed description of the issue"
         }}
         
@@ -300,7 +329,10 @@ class QuickSupportBot:
         {{
             "case_id": "case ID mentioned (like CASE-0001)",
             "note": "what happened or what was done",
-            "sub_status": "one of: {', '.join(SUB_STATUSES)}"
+            "sub_status": "one of: {', '.join(SUB_STATUSES)}",
+            "listing_completion_date": "YYYY-MM-DD if mentioned as completed",
+            "csat_score": "number between 1-5 if mentioned",
+            "feedback_received": "Yes/No if mentioned"
         }}
         
         Return JSON only:
@@ -343,11 +375,18 @@ class QuickSupportBot:
         
         Text: "{text}"
         
-        Return exactly one of these words: create, update, query
+        Return exactly one of these words: create, update, query, analytics
         
         - "create" if this is about a new issue or case
         - "update" if this is about updating an existing case
-        - "query" if this is asking for information about a case
+        - "query" if this is asking for information about a specific case
+        - "analytics" if this is asking for statistics, counts, or analysis across multiple cases
+        
+        Examples of analytics queries:
+        - "How many cases are in WIP?"
+        - "Show me EU marketplace cases"
+        - "Count of Smart Connect cases"
+        - "Cases by priority"
         """
         
         try:
@@ -366,6 +405,125 @@ class QuickSupportBot:
                 
         except Exception as e:
             return "error"
+    
+    def analyze_cases(self, query):
+        """Perform analytics on cases based on natural language query"""
+        prompt = f"""
+        Convert this natural language query into SQL filter conditions for case analysis:
+        
+        Query: "{query}"
+        
+        Available fields and values:
+        - case_status: {', '.join(CASE_STATUSES)}
+        - marketplace: {', '.join(MARKETPLACES)}
+        - workstream: {', '.join(WORKSTREAMS)}
+        - priority: {', '.join(PRIORITIES)}
+        - sub_status: {', '.join(SUB_STATUSES)}
+        - seller_type: {', '.join(SELLER_TYPES)}
+        
+        Return JSON with filters and grouping:
+        {{
+            "filters": {{
+                "case_status": ["WIP"] or null,
+                "marketplace": ["EU"] or null,
+                "workstream": ["STRATEGIC_PRODUCT_SMART_CONNECT_EU"] or null,
+                "priority": ["High"] or null,
+                "sub_status": ["INT_WIP"] or null
+            }},
+            "group_by": "case_status" or "marketplace" or "workstream" or null,
+            "description": "human readable description of what is being analyzed"
+        }}
+        
+        Return JSON only:
+        """
+        
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are an expert at converting natural language to database queries for case analytics."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=300,
+                extra_headers={
+                    "HTTP-Referer": "http://localhost:3000",
+                    "X-Title": "API Support Bot"
+                }
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            if result.startswith('```json'):
+                result = result[7:-3]
+            elif result.startswith('```'):
+                result = result[3:-3]
+            
+            analysis_params = json.loads(result)
+            
+            # Execute the analysis
+            return self.execute_analysis(analysis_params)
+                
+        except Exception as e:
+            return f"❌ Error analyzing query: {str(e)}"
+    
+    def execute_analysis(self, params):
+        """Execute case analysis based on parameters"""
+        conn = sqlite3.connect(self.db_path)
+        
+        # Build SQL query
+        where_conditions = []
+        values = []
+        
+        filters = params.get('filters', {})
+        for field, field_values in filters.items():
+            if field_values:
+                placeholders = ', '.join(['?' for _ in field_values])
+                where_conditions.append(f"{field} IN ({placeholders})")
+                values.extend(field_values)
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        group_by = params.get('group_by')
+        
+        if group_by:
+            query = f"""
+                SELECT {group_by}, COUNT(*) as count
+                FROM cases 
+                WHERE {where_clause}
+                GROUP BY {group_by}
+                ORDER BY count DESC
+            """
+        else:
+            query = f"""
+                SELECT COUNT(*) as total_count
+                FROM cases 
+                WHERE {where_clause}
+            """
+        
+        try:
+            df = pd.read_sql_query(query, conn, params=values)
+            conn.close()
+            
+            # Format results
+            description = params.get('description', 'Case analysis')
+            
+            if group_by:
+                result = f"📊 **{description}**\n\n"
+                for _, row in df.iterrows():
+                    result += f"• **{row[group_by]}**: {row['count']} cases\n"
+                result += f"\n**Total**: {df['count'].sum()} cases"
+            else:
+                total = df.iloc[0]['total_count'] if len(df) > 0 else 0
+                result = f"📊 **{description}**\n\n**Total**: {total} cases"
+            
+            return result
+            
+        except Exception as e:
+            conn.close()
+            return f"❌ Error executing analysis: {str(e)}"
     
     def create_case_from_data(self, case_data):
         """Create case in database from provided data"""
@@ -388,16 +546,16 @@ class QuickSupportBot:
             'case_source': case_data.get('case_source', 'ASTRO'),
             'case_status': 'SUBMITTED',
             'workstream': case_data.get('workstream', 'DSR'),
-            'listing_start_date': datetime.now().strftime('%Y-%m-%d'),
-            'listing_completion_date': '',
+            'listing_start_date': case_data.get('listing_start_date', datetime.now().strftime('%Y-%m-%d')),
+            'listing_completion_date': case_data.get('listing_completion_date', ''),
             'issue_type': case_data.get('issue_type', 'General Issue'),
             'complexity': case_data.get('complexity', 'Medium'),
             'priority': case_data.get('priority', 'Medium'),
             'api_supported': case_data.get('api_supported', 'General API'),
             'integration_type': 'REST API',
             'seller_type': case_data.get('seller_type', 'EXISTING'),
-            'feedback_received': 0,
-            'csat_score': None,
+            'feedback_received': case_data.get('feedback_received', 'No'),
+            'csat_score': case_data.get('csat_score', None),
             'notes': case_data.get('notes', ''),
             'last_sub_status': 'Case_Created',
             'created_at': datetime.now().isoformat(),
@@ -415,7 +573,7 @@ class QuickSupportBot:
                 VALUES (?, ?, ?, ?, ?)
             ''', (
                 case_id,
-                'Case created from chat interface',
+                'Case created from interface',
                 'System',
                 datetime.now().isoformat(),
                 'Case_Created'
@@ -430,8 +588,8 @@ class QuickSupportBot:
             conn.close()
             raise Exception(f"Database error: {e}")
     
-    def update_case_status(self, case_id, note, sub_status, updated_by="System"):
-        """Update case with new substatus"""
+    def update_case_status(self, case_id, note, sub_status, updated_by="System", additional_data=None):
+        """Update case with new substatus and additional data"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -454,7 +612,13 @@ class QuickSupportBot:
                 sub_status
             ))
             
-            # Update case with latest substatus and map to case status
+            # Prepare case updates
+            case_updates = {
+                'last_sub_status': sub_status,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            # Map sub-status to case status
             status_mapping = {
                 'Case_Created': 'SUBMITTED',
                 'INT_START': 'WIP',
@@ -466,13 +630,22 @@ class QuickSupportBot:
                 'Note': 'WIP'
             }
             
-            new_case_status = status_mapping.get(sub_status, 'WIP')
+            case_updates['case_status'] = status_mapping.get(sub_status, 'WIP')
             
-            cursor.execute('''
-                UPDATE cases 
-                SET last_sub_status = ?, case_status = ?, updated_at = ?
-                WHERE case_id = ?
-            ''', (sub_status, new_case_status, datetime.now().isoformat(), case_id))
+            # Add additional data if provided
+            if additional_data:
+                if additional_data.get('listing_completion_date'):
+                    case_updates['listing_completion_date'] = additional_data['listing_completion_date']
+                if additional_data.get('csat_score'):
+                    case_updates['csat_score'] = additional_data['csat_score']
+                if additional_data.get('feedback_received'):
+                    case_updates['feedback_received'] = additional_data['feedback_received']
+            
+            # Build update query
+            set_clause = ', '.join([f"{key} = ?" for key in case_updates.keys()])
+            values = list(case_updates.values()) + [case_id]
+            
+            cursor.execute(f"UPDATE cases SET {set_clause} WHERE case_id = ?", values)
             
             conn.commit()
             conn.close()
@@ -528,6 +701,43 @@ class QuickSupportBot:
         
         return cases
     
+    def get_hierarchical_data(self, listing_start_date=None, listing_end_date=None, created_start_date=None, created_end_date=None):
+        """Get hierarchical case data with date filters"""
+        conn = sqlite3.connect(self.db_path)
+        
+        # Build date filters
+        where_conditions = []
+        params = []
+        
+        if listing_start_date and listing_end_date:
+            where_conditions.append("listing_start_date BETWEEN ? AND ?")
+            params.extend([listing_start_date, listing_end_date])
+        
+        if created_start_date and created_end_date:
+            where_conditions.append("DATE(created_at) BETWEEN ? AND ?")
+            params.extend([created_start_date, created_end_date])
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        query = f"""
+        SELECT 
+            workstream,
+            marketplace,
+            issue_type,
+            api_supported,
+            last_sub_status,
+            COUNT(*) as count
+        FROM cases 
+        WHERE {where_clause}
+        GROUP BY workstream, marketplace, issue_type, api_supported, last_sub_status
+        ORDER BY workstream, marketplace, issue_type, api_supported, last_sub_status
+        """
+        
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        return df
+    
     def change_model(self, tier):
         """Change the AI model being used"""
         if tier in MODELS:
@@ -536,9 +746,9 @@ class QuickSupportBot:
         else:
             return f"❌ Invalid tier. Available: {', '.join(MODELS.keys())}"
 
-    # Legacy methods for backward compatibility
+    # Enhanced legacy method for backward compatibility
     def process_message(self, user_id, message):
-        """Process user input - legacy method for compatibility"""
+        """Process user input - enhanced with analytics"""
         intent = self.determine_intent(message)
         
         if "create" in intent:
@@ -570,11 +780,20 @@ You can update this case by referencing: {case_id}"""
             update_data = self.extract_update_info(message)
             
             if "error" not in update_data and update_data.get('case_id'):
+                additional_data = {}
+                if update_data.get('listing_completion_date'):
+                    additional_data['listing_completion_date'] = update_data['listing_completion_date']
+                if update_data.get('csat_score'):
+                    additional_data['csat_score'] = update_data['csat_score']
+                if update_data.get('feedback_received'):
+                    additional_data['feedback_received'] = update_data['feedback_received']
+                
                 success, message = self.update_case_status(
                     update_data['case_id'],
                     update_data.get('note', 'Update from chat'),
                     update_data.get('sub_status', 'Note'),
-                    'Chat User'
+                    'Chat User',
+                    additional_data if additional_data else None
                 )
                 
                 if success:
@@ -583,6 +802,10 @@ You can update this case by referencing: {case_id}"""
                     return f"❌ {message}"
             else:
                 return "❌ Please specify a valid case ID and update details."
+        
+        elif "analytics" in intent:
+            # Handle analytics queries
+            return self.analyze_cases(message)
         
         elif "query" in intent:
             # Extract case ID from message
@@ -615,6 +838,10 @@ You can update this case by referencing: {case_id}"""
 **API:** {case_dict['api_supported']}
 **Workstream:** {case_dict['workstream']}
 **Specialist:** {case_dict['specialist_name']}
+**Listing Start:** {case_dict.get('listing_start_date', 'Not set')}
+**Listing Complete:** {case_dict.get('listing_completion_date', 'Not completed')}
+**Feedback:** {case_dict.get('feedback_received', 'No')}
+**CSAT:** {case_dict.get('csat_score', 'Not rated')}
 
 **Notes:** {case_dict.get('notes', 'None')}{updates_text}"""
                 else:
@@ -626,4 +853,5 @@ You can update this case by referencing: {case_id}"""
             return """❓ I'm not sure what you want to do. Try:
 - 'New case for [seller] on [marketplace]'
 - 'Update CASE-0001: [description]'  
-- 'Show case CASE-0001'"""
+- 'Show case CASE-0001'
+- 'How many WIP cases in EU marketplace?'"""
