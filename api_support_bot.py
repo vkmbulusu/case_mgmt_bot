@@ -7,7 +7,6 @@ import random
 
 # OpenRouter Configuration
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-client = None
 
 # Business Constants
 MARKETPLACES = ["EU5", "EU", "3PX", "MENA", "AU", "SG", "NA", "JP", "ZA"]
@@ -76,16 +75,17 @@ MODELS = {
 
 class QuickSupportBot:
     def __init__(self, model_tier="balanced", api_key=None):
-        global client
-        
+        # Store client as instance variable instead of global
+        self.client = None
         if api_key:
-            client = OpenAI(
+            self.client = OpenAI(
                 api_key=api_key,
                 base_url=OPENROUTER_BASE_URL,
             )
         
         self.db_path = 'support_demo.db'
         self.model = MODELS[model_tier]
+        self.api_key = api_key  # Store for potential re-initialization
         self.setup_database()
         self.populate_test_data()
     
@@ -292,6 +292,26 @@ class QuickSupportBot:
         conn.commit()
         conn.close()
     
+    def _make_api_call(self, messages, temperature=0.1, max_tokens=400):
+        """Centralized API call method with proper error handling"""
+        if not self.client:
+            return {"error": "API client not initialized. Please check your API key."}
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                extra_headers={
+                    "HTTP-Referer": "http://localhost:3000",
+                    "X-Title": "API Support Bot"
+                }
+            )
+            return {"success": True, "content": response.choices[0].message.content.strip()}
+        except Exception as e:
+            return {"error": str(e)}
+    
     def extract_case_info(self, text):
         """Extract case information from text"""
         prompt = f"""
@@ -316,34 +336,27 @@ class QuickSupportBot:
         Return JSON only:
         """
         
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are an expert at extracting structured data from API integration support conversations."
+            },
+            {"role": "user", "content": prompt}
+        ]
+        
+        result = self._make_api_call(messages)
+        if "error" in result:
+            return {"error": result["error"]}
+        
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are an expert at extracting structured data from API integration support conversations."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=400,
-                extra_headers={
-                    "HTTP-Referer": "http://localhost:3000",
-                    "X-Title": "API Support Bot"
-                }
-            )
-            
-            result = response.choices[0].message.content.strip()
-            
+            content = result["content"]
             # Clean JSON response
-            if result.startswith('```json'):
-                result = result[7:-3]
-            elif result.startswith('```'):
-                result = result[3:-3]
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
             
-            return json.loads(result)
-                
+            return json.loads(content)
         except Exception as e:
             return {"error": str(e)}
     
@@ -365,33 +378,26 @@ class QuickSupportBot:
         Return JSON only:
         """
         
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are an expert at extracting case update information."
+            },
+            {"role": "user", "content": prompt}
+        ]
+        
+        result = self._make_api_call(messages, max_tokens=300)
+        if "error" in result:
+            return {"error": result["error"]}
+        
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are an expert at extracting case update information."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=300,
-                extra_headers={
-                    "HTTP-Referer": "http://localhost:3000",
-                    "X-Title": "API Support Bot"
-                }
-            )
+            content = result["content"]
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
             
-            result = response.choices[0].message.content.strip()
-            
-            if result.startswith('```json'):
-                result = result[7:-3]
-            elif result.startswith('```'):
-                result = result[3:-3]
-            
-            return json.loads(result)
-                
+            return json.loads(content)
         except Exception as e:
             return {"error": str(e)}
     
@@ -433,22 +439,13 @@ class QuickSupportBot:
         - "New case for seller" = create
         """
         
-        try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=50,
-                extra_headers={
-                    "HTTP-Referer": "http://localhost:3000",
-                    "X-Title": "API Support Bot"
-                }
-            )
-            
-            return response.choices[0].message.content.strip().lower()
-                
-        except Exception as e:
+        messages = [{"role": "user", "content": prompt}]
+        result = self._make_api_call(messages, max_tokens=50)
+        
+        if "error" in result:
             return "error"
+        
+        return result["content"].lower()
     
     def analyze_cases(self, query):
         """Perform analytics on cases based on natural language query"""
@@ -483,32 +480,26 @@ class QuickSupportBot:
         Return JSON only:
         """
         
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are an expert at converting natural language to database queries for case analytics."
+            },
+            {"role": "user", "content": prompt}
+        ]
+        
+        result = self._make_api_call(messages, max_tokens=300)
+        if "error" in result:
+            return f"❌ Error analyzing query: {result['error']}"
+        
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are an expert at converting natural language to database queries for case analytics."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=300,
-                extra_headers={
-                    "HTTP-Referer": "http://localhost:3000",
-                    "X-Title": "API Support Bot"
-                }
-            )
+            content = result["content"]
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
             
-            result = response.choices[0].message.content.strip()
-            
-            if result.startswith('```json'):
-                result = result[7:-3]
-            elif result.startswith('```'):
-                result = result[3:-3]
-            
-            analysis_params = json.loads(result)
+            analysis_params = json.loads(content)
             
             # Execute the analysis
             return self.execute_analysis(analysis_params)
@@ -787,26 +778,6 @@ class QuickSupportBot:
         """
         
         df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
-        
-        return df
-    
-    def get_specialist_case_counts(self):
-        """Get case counts by specialist and status"""
-        conn = sqlite3.connect(self.db_path)
-        
-        query = """
-        SELECT 
-            specialist_id,
-            specialist_name,
-            case_status,
-            COUNT(*) as count
-        FROM cases 
-        GROUP BY specialist_id, specialist_name, case_status
-        ORDER BY specialist_id, case_status
-        """
-        
-        df = pd.read_sql_query(query, conn)
         conn.close()
         
         return df
